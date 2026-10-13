@@ -1,0 +1,820 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>길눈 - 버스·지하철 노선 탐색</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,'Malgun Gothic',sans-serif;color:#20242b;background:#f4f5f7}
+button,input{font:inherit}
+button{cursor:pointer}
+.app{display:flex;height:100vh}
+.sidebar{width:390px;min-width:320px;background:white;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;z-index:2}
+.header{padding:20px;border-bottom:1px solid #eee}
+.logo{font-size:23px;font-weight:800;margin-bottom:5px}
+.subtitle{font-size:12px;color:#777}
+.tabs{display:flex;gap:6px;margin-top:18px}
+.tab{flex:1;border:0;border-radius:8px;background:#f1f2f4;padding:11px 5px;font-weight:bold}
+.tab.active{background:#fee500}
+.search{display:flex;gap:7px;margin-top:15px}
+.search input{flex:1;min-width:0;border:1px solid #ddd;border-radius:8px;padding:12px;outline:none}
+.search button,.primary{border:0;border-radius:8px;background:#fee500;padding:12px 15px;font-weight:bold}
+.status{padding:13px 20px;font-size:12px;color:#777;border-bottom:1px solid #eee}
+.results{flex:1;overflow-y:auto}
+.item{padding:17px 20px;border-bottom:1px solid #eee;cursor:pointer}
+.item:hover{background:#f8f9fa}
+.item.selected{background:#fff9dc}
+.item-title{font-size:15px;font-weight:700;margin-bottom:6px}
+.item-sub{font-size:12px;color:#777;line-height:1.7}
+.badge{display:inline-block;border-radius:5px;padding:4px 7px;font-size:12px;font-weight:bold;background:#eee;margin-right:5px}
+.bus-blue{background:#e5f0ff;color:#1465bc}
+.bus-red{background:#ffe9e9;color:#c43737}
+.bus-green{background:#e7f5e9;color:#287b39}
+.route{padding:20px}
+.route-title{font-size:19px;font-weight:800;margin-bottom:7px}
+.route-desc{font-size:12px;color:#777;margin-bottom:18px}
+.stop{display:flex;gap:14px;min-height:55px}
+.track{width:17px;display:flex;flex-direction:column;align-items:center}
+.dot{width:12px;height:12px;border:3px solid #4384d5;background:white;border-radius:50%;flex-shrink:0}
+.line{width:3px;background:#4384d5;flex:1}
+.stop-name{font-size:13px;padding-bottom:22px}
+.stop.current .dot{background:#fee500;border-color:#20242b;width:16px;height:16px}
+.stop.current .stop-name{font-weight:bold;color:#111}
+.back{background:#f2f3f5;border:0;border-radius:7px;padding:9px 13px;margin-bottom:18px}
+.map-area{position:relative;flex:1;min-width:0}
+#map{width:100%;height:100%}
+.location{position:absolute;right:20px;bottom:25px;z-index:3;background:white;border:1px solid #ddd;border-radius:9px;padding:13px;box-shadow:0 2px 10px #0002}
+.notice{position:absolute;left:50%;top:18px;transform:translateX(-50%);background:white;padding:12px 18px;border-radius:8px;box-shadow:0 2px 10px #0002;z-index:5;font-size:12px;max-width:90%;text-align:center}
+.settings{padding:15px 20px;border-top:1px solid #eee}
+.settings summary{font-size:12px;color:#777;cursor:pointer}
+.settings input{display:block;width:100%;padding:10px;border:1px solid #ddd;border-radius:7px;margin-top:10px;font-size:12px}
+.settings button{margin-top:10px;width:100%}
+.empty{padding:25px 20px;color:#777;font-size:13px;line-height:1.8}
+@media(max-width:700px){
+.app{flex-direction:column}
+.sidebar{width:100%;min-width:0;height:52%}
+.map-area{height:48%;flex:none}
+.header{padding:13px}
+.logo{font-size:20px}
+.tabs{margin-top:10px}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <aside class="sidebar">
+    <div class="header">
+      <div class="logo">길눈</div>
+      <div class="subtitle">버스와 지하철 노선을 쉽게 확인하세요.</div>
+
+      <div class="tabs">
+        <button class="tab active" data-mode="place">장소</button>
+        <button class="tab" data-mode="bus">버스</button>
+        <button class="tab" data-mode="subway">지하철</button>
+      </div>
+
+      <div class="search">
+        <input id="searchInput" placeholder="장소를 검색하세요">
+        <button id="searchButton">검색</button>
+      </div>
+    </div>
+
+    <div class="status" id="status">검색어를 입력해 주세요.</div>
+    <div class="results" id="results"></div>
+
+    <details class="settings">
+      <summary>공공데이터 API 키 설정</summary>
+      <input id="busKey" placeholder="경기버스정보 API 인증키">
+      <input id="subwayKey" placeholder="서울 열린데이터광장 API 인증키">
+      <button class="primary" id="saveKeys">키 적용</button>
+    </details>
+  </aside>
+
+  <main class="map-area">
+    <div id="map"></div>
+    <div class="notice" id="notice">지도를 불러오는 중...</div>
+    <button class="location" id="locationButton">◎ 내 위치</button>
+  </main>
+</div>
+
+<script>
+// 카카오맵 JavaScript 키
+const KAKAO_KEY = "0fb9406d5e25da7b3ad478b6ccbfbc0b";
+
+// 공공데이터 API 주소
+const BUS_API = "https://apis.data.go.kr/6410000";
+const SUBWAY_API = "http://openapi.seoul.go.kr:8088";
+
+// 기본 위치와 확대 레벨
+const DEFAULT_LAT = 37.5665;
+const DEFAULT_LNG = 126.9780;
+const MAP_LEVEL = 5;
+
+// 전역 변수
+let map;
+let places;
+let infoWindow;
+let mode = "place";
+let markers = [];
+let currentMarker = null;
+let selectedStation = null;
+let busKey = "";
+let subwayKey = "";
+
+// 화면 요소
+const searchInput = document.getElementById("searchInput");
+const searchButton = document.getElementById("searchButton");
+const results = document.getElementById("results");
+const statusBox = document.getElementById("status");
+const notice = document.getElementById("notice");
+
+// 안내 메시지 표시
+function showNotice(message) {
+  notice.textContent = message;
+  notice.style.display = "block";
+}
+
+function hideNotice() {
+  notice.style.display = "none";
+}
+
+function setStatus(message) {
+  statusBox.textContent = message;
+}
+
+// HTML 특수문자 처리
+function escapeHTML(value) {
+  return String(value ?? "").replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char]);
+}
+
+// 카카오맵 SDK 로딩
+function loadKakaoSDK() {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+
+    script.src =
+      "https://dapi.kakao.com/v2/maps/sdk.js" +
+      "?appkey=" + KAKAO_KEY +
+      "&libraries=services&autoload=false";
+
+    script.onload = () => {
+      if (!window.kakao || !kakao.maps) {
+        reject(new Error("카카오맵 SDK 초기화 실패"));
+        return;
+      }
+
+      kakao.maps.load(resolve);
+    };
+
+    script.onerror = () => reject(
+      new Error("카카오맵 SDK를 불러오지 못했습니다.")
+    );
+
+    document.head.appendChild(script);
+  });
+}
+
+// 지도 초기화
+function initializeMap() {
+  map = new kakao.maps.Map(
+    document.getElementById("map"),
+    {
+      center: new kakao.maps.LatLng(DEFAULT_LAT, DEFAULT_LNG),
+      level: MAP_LEVEL
+    }
+  );
+
+  places = new kakao.maps.services.Places();
+  infoWindow = new kakao.maps.InfoWindow({zIndex: 10});
+
+  requestLocation();
+}
+
+// 현재 위치 요청
+function requestLocation() {
+  if (!navigator.geolocation) {
+    hideNotice();
+    setStatus("현재 위치를 사용할 수 없습니다.");
+    return;
+  }
+
+  showNotice("현재 위치를 확인하는 중...");
+
+  navigator.geolocation.getCurrentPosition(
+    position => {
+      const point = new kakao.maps.LatLng(
+        position.coords.latitude,
+        position.coords.longitude
+      );
+
+      map.setCenter(point);
+      map.setLevel(MAP_LEVEL);
+
+      if (currentMarker) currentMarker.setMap(null);
+
+      currentMarker = new kakao.maps.Marker({
+        map,
+        position: point
+      });
+
+      hideNotice();
+    },
+    error => {
+      console.warn("위치 오류:", error.message);
+      hideNotice();
+      setStatus("위치 확인 실패. 기본 지도를 표시합니다.");
+    },
+    {
+      enableHighAccuracy: true,
+      timeout: 10000,
+      maximumAge: 0
+    }
+  );
+}
+
+// 기존 검색 마커 제거
+function clearMarkers() {
+  markers.forEach(marker => marker.setMap(null));
+  markers = [];
+}
+
+// 지도에 마커 추가
+function addMarker(lat, lng, title, callback) {
+  const position = new kakao.maps.LatLng(
+    Number(lat),
+    Number(lng)
+  );
+
+  const marker = new kakao.maps.Marker({
+    map,
+    position
+  });
+
+  markers.push(marker);
+
+  kakao.maps.event.addListener(marker, "click", () => {
+    if (callback) callback();
+
+    infoWindow.setContent(
+      '<div style="padding:10px;font-size:13px;">' +
+      escapeHTML(title) +
+      '</div>'
+    );
+
+    infoWindow.open(map, marker);
+  });
+
+  return position;
+}
+
+// 지도 이동
+function moveMap(lat, lng) {
+  const point = new kakao.maps.LatLng(
+    Number(lat),
+    Number(lng)
+  );
+
+  map.setCenter(point);
+  map.setLevel(3);
+}
+
+// 검색 모드 변경
+function changeMode(nextMode) {
+  mode = nextMode;
+  selectedStation = null;
+  clearMarkers();
+  results.innerHTML = "";
+
+  document.querySelectorAll(".tab").forEach(tab => {
+    tab.classList.toggle(
+      "active",
+      tab.dataset.mode === mode
+    );
+  });
+
+  const placeholders = {
+    place: "장소를 검색하세요",
+    bus: "고양시 버스 정류장 이름 또는 번호",
+    subway: "수도권 지하철역 이름"
+  };
+
+  searchInput.placeholder = placeholders[mode];
+  searchInput.value = "";
+
+  const messages = {
+    place: "장소를 검색해 주세요.",
+    bus: "고양시 버스 정류장을 검색해 주세요.",
+    subway: "지하철역을 검색해 주세요."
+  };
+
+  setStatus(messages[mode]);
+}
+
+// 검색 시작
+function search() {
+  const keyword = searchInput.value.trim();
+
+  if (!keyword) {
+    alert("검색어를 입력해 주세요.");
+    return;
+  }
+
+  if (!map || !places) {
+    alert("지도가 아직 준비되지 않았습니다.");
+    return;
+  }
+
+  if (mode === "place") searchPlaces(keyword);
+  if (mode === "bus") searchBusStations(keyword);
+  if (mode === "subway") searchSubwayStations(keyword);
+}
+
+// 일반 장소 검색
+function searchPlaces(keyword) {
+  showNotice("장소 검색 중...");
+
+  places.keywordSearch(keyword, (data, resultStatus) => {
+    hideNotice();
+    clearMarkers();
+    results.innerHTML = "";
+
+    if (resultStatus === kakao.maps.services.Status.ZERO_RESULT) {
+      setStatus("검색 결과가 없습니다.");
+      return;
+    }
+
+    if (resultStatus !== kakao.maps.services.Status.OK) {
+      setStatus("장소 검색 오류: " + resultStatus);
+      return;
+    }
+
+    setStatus("검색 결과 " + data.length + "개");
+
+    const bounds = new kakao.maps.LatLngBounds();
+
+    data.forEach(place => {
+      const position = addMarker(
+        place.y,
+        place.x,
+        place.place_name,
+        () => moveMap(place.y, place.x)
+      );
+
+      bounds.extend(position);
+
+      const item = document.createElement("div");
+      item.className = "item";
+
+      item.innerHTML =
+        '<div class="item-title">' +
+        escapeHTML(place.place_name) +
+        '</div><div class="item-sub">' +
+        escapeHTML(place.road_address_name || place.address_name) +
+        '</div>';
+
+      item.onclick = () => moveMap(place.y, place.x);
+      results.appendChild(item);
+    });
+
+    map.setBounds(bounds);
+  });
+}
+
+// XML 문서에서 태그 값 읽기
+function xmlValue(element, tag) {
+  return element.getElementsByTagName(tag)[0]?.textContent || "";
+}
+
+// XML API 요청
+async function fetchXML(url) {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error("HTTP 오류: " + response.status);
+  }
+
+  const text = await response.text();
+  const xml = new DOMParser().parseFromString(text, "text/xml");
+
+  if (xml.querySelector("parsererror")) {
+    throw new Error("XML 응답을 해석할 수 없습니다.");
+  }
+
+  const resultCode = xml.querySelector("resultCode")?.textContent;
+
+  if (resultCode && resultCode !== "0") {
+    throw new Error(
+      xml.querySelector("resultMessage")?.textContent ||
+      "공공데이터 API 오류: " + resultCode
+    );
+  }
+
+  return xml;
+}
+
+// 고양시 버스 정류장 검색
+async function searchBusStations(keyword) {
+  if (!busKey) {
+    setStatus("경기버스정보 API 키를 먼저 입력해 주세요.");
+    return;
+  }
+
+  showNotice("버스 정류장 검색 중...");
+
+  try {
+    const url =
+      BUS_API +
+      "/busstationservice/v2/getBusStationListv2" +
+      "?serviceKey=" + encodeURIComponent(busKey) +
+      "&keyword=" + encodeURIComponent(keyword);
+
+    const xml = await fetchXML(url);
+    const stations = [
+      ...xml.getElementsByTagName("busStationList")
+    ];
+
+    clearMarkers();
+    results.innerHTML = "";
+
+    // 고양시 정류장만 표시
+    const filtered = stations.filter(station => {
+      const region = xmlValue(station, "regionName");
+      const name = xmlValue(station, "stationName");
+
+      return region.includes("고양") ||
+        name.includes("고양");
+    });
+
+    setStatus("고양시 검색 결과 " + filtered.length + "개");
+
+    if (!filtered.length) {
+      results.innerHTML =
+        '<div class="empty">정류장이 검색되지 않았어. API 응답에 지역 정보가 없거나 검색 결과가 없을 수 있어.</div>';
+    }
+
+    filtered.forEach(station => {
+      const stationId = xmlValue(station, "stationId");
+      const stationName = xmlValue(station, "stationName");
+      const stationNo = xmlValue(station, "stationNo");
+      const lat = xmlValue(station, "y");
+      const lng = xmlValue(station, "x");
+
+      const stationData = {
+        id: stationId,
+        name: stationName,
+        no: stationNo,
+        lat,
+        lng
+      };
+
+      const item = document.createElement("div");
+      item.className = "item";
+
+      item.innerHTML =
+        '<div class="item-title">🚏 ' +
+        escapeHTML(stationName) +
+        '</div><div class="item-sub">정류장 번호: ' +
+        escapeHTML(stationNo) +
+        '</div>';
+
+      item.onclick = () => openBusStation(stationData);
+      results.appendChild(item);
+
+      if (lat && lng) {
+        addMarker(lat, lng, stationName, () => {
+          openBusStation(stationData);
+        });
+      }
+    });
+
+  } catch (error) {
+    console.error(error);
+    setStatus("버스 검색 실패: " + error.message);
+  } finally {
+    hideNotice();
+  }
+}
+
+// 정류장을 지나는 버스 조회
+async function openBusStation(station) {
+  selectedStation = station;
+
+  if (station.lat && station.lng) {
+    moveMap(station.lat, station.lng);
+  }
+
+  showNotice("경유 버스 조회 중...");
+
+  try {
+    const url =
+      BUS_API +
+      "/busstationservice/v2/getBusStationViaRouteListv2" +
+      "?serviceKey=" + encodeURIComponent(busKey) +
+      "&stationId=" + encodeURIComponent(station.id);
+
+    const xml = await fetchXML(url);
+    const routes = [
+      ...xml.getElementsByTagName("busRouteList")
+    ];
+
+    results.innerHTML = "";
+
+    const header = document.createElement("div");
+    header.className = "route";
+    header.innerHTML =
+      '<button class="back">← 정류장 검색</button>' +
+      '<div class="route-title">' +
+      escapeHTML(station.name) +
+      '</div><div class="route-desc">이 정류장을 지나는 버스</div>';
+
+    header.querySelector("button").onclick = () => {
+      searchBusStations(searchInput.value.trim());
+    };
+
+    results.appendChild(header);
+    setStatus("경유 버스 " + routes.length + "개");
+
+    if (!routes.length) {
+      results.insertAdjacentHTML(
+        "beforeend",
+        '<div class="empty">경유 버스 정보가 없습니다.</div>'
+      );
+    }
+
+    routes.forEach(route => {
+      const routeId = xmlValue(route, "routeId");
+      const routeName = xmlValue(route, "routeName");
+      const routeType = xmlValue(route, "routeTypeName");
+
+      const item = document.createElement("div");
+      item.className = "item";
+
+      item.innerHTML =
+        '<div class="item-title"><span class="badge bus-blue">' +
+        escapeHTML(routeName) +
+        '</span></div><div class="item-sub">' +
+        escapeHTML(routeType) +
+        ' · 전체 노선도 보기 →</div>';
+
+      item.onclick = () => openBusRoute(
+        routeId,
+        routeName,
+        station
+      );
+
+      results.appendChild(item);
+    });
+
+  } catch (error) {
+    console.error(error);
+    setStatus("경유 버스 조회 실패: " + error.message);
+  } finally {
+    hideNotice();
+  }
+}
+
+// 버스 전체 노선도 조회
+async function openBusRoute(routeId, routeName, station) {
+  showNotice("버스 노선도를 불러오는 중...");
+
+  try {
+    const url =
+      BUS_API +
+      "/busrouteservice/v2/getBusRouteStationListv2" +
+      "?serviceKey=" + encodeURIComponent(busKey) +
+      "&routeId=" + encodeURIComponent(routeId);
+
+    const xml = await fetchXML(url);
+    const stops = [
+      ...xml.getElementsByTagName("busRouteStationList")
+    ];
+
+    // 정류장 순서 기준 정렬
+    stops.sort((a, b) =>
+      Number(xmlValue(a, "stationSeq")) -
+      Number(xmlValue(b, "stationSeq"))
+    );
+
+    results.innerHTML = "";
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "route";
+
+    const back = document.createElement("button");
+    back.className = "back";
+    back.textContent = "← 경유 버스 목록";
+    back.onclick = () => openBusStation(station);
+
+    const title = document.createElement("div");
+    title.className = "route-title";
+    title.textContent = routeName + "번 노선도";
+
+    const description = document.createElement("div");
+    description.className = "route-desc";
+    description.textContent =
+      "전체 정류장 " + stops.length + "개";
+
+    wrapper.appendChild(back);
+    wrapper.appendChild(title);
+    wrapper.appendChild(description);
+
+    clearMarkers();
+
+    stops.forEach((stop, index) => {
+      const stopId = xmlValue(stop, "stationId");
+      const stopName = xmlValue(stop, "stationName");
+      const lat = xmlValue(stop, "y");
+      const lng = xmlValue(stop, "x");
+
+      const isCurrent = stopId === station.id;
+
+      const row = document.createElement("div");
+      row.className = "stop" + (isCurrent ? " current" : "");
+
+      row.innerHTML =
+        '<div class="track"><div class="dot"></div>' +
+        (index < stops.length - 1 ?
+          '<div class="line"></div>' : '') +
+        '</div><div class="stop-name">' +
+        escapeHTML(stopName) +
+        (isCurrent ? " 📍 현재 선택한 정류장" : "") +
+        '</div>';
+
+      if (lat && lng) {
+        row.style.cursor = "pointer";
+        row.onclick = () => moveMap(lat, lng);
+        addMarker(lat, lng, stopName);
+      }
+
+      wrapper.appendChild(row);
+    });
+
+    results.appendChild(wrapper);
+    setStatus(routeName + "번 전체 노선");
+
+  } catch (error) {
+    console.error(error);
+    setStatus("노선도 조회 실패: " + error.message);
+  } finally {
+    hideNotice();
+  }
+}
+
+// 수도권 지하철역 장소 검색
+function searchSubwayStations(keyword) {
+  showNotice("지하철역 검색 중...");
+
+  places.keywordSearch(
+    keyword,
+    (data, resultStatus) => {
+      hideNotice();
+      clearMarkers();
+      results.innerHTML = "";
+
+      if (resultStatus !== kakao.maps.services.Status.OK) {
+        setStatus("지하철역 검색 결과가 없습니다.");
+        return;
+      }
+
+      const stations = data.filter(place =>
+        place.category_group_code === "SW8"
+      );
+
+      setStatus("지하철역 검색 결과 " + stations.length + "개");
+
+      stations.forEach(station => {
+        const item = document.createElement("div");
+        item.className = "item";
+
+        item.innerHTML =
+          '<div class="item-title">🚇 ' +
+          escapeHTML(station.place_name) +
+          '</div><div class="item-sub">' +
+          escapeHTML(station.address_name) +
+          '<br>노선 정보 확인 →</div>';
+
+        item.onclick = () => openSubwayStation(station);
+        results.appendChild(item);
+
+        addMarker(
+          station.y,
+          station.x,
+          station.place_name,
+          () => openSubwayStation(station)
+        );
+      });
+    },
+    {
+      category_group_code: "SW8"
+    }
+  );
+}
+
+// 지하철역 상세 화면
+function openSubwayStation(station) {
+  moveMap(station.y, station.x);
+
+  results.innerHTML = "";
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "route";
+
+  const back = document.createElement("button");
+  back.className = "back";
+  back.textContent = "← 지하철역 검색";
+  back.onclick = () => searchSubwayStations(
+    searchInput.value.trim()
+  );
+
+  const title = document.createElement("div");
+  title.className = "route-title";
+  title.textContent = station.place_name;
+
+  const description = document.createElement("div");
+  description.className = "route-desc";
+  description.textContent = station.address_name;
+
+  wrapper.appendChild(back);
+  wrapper.appendChild(title);
+  wrapper.appendChild(description);
+
+  const message = document.createElement("div");
+  message.className = "empty";
+  message.textContent =
+    "지하철역 검색은 연결되었지만, 이 역을 지나는 노선 목록과 " +
+    "정확한 전체 역 순서는 아직 별도의 노선 데이터 연결이 필요합니다. " +
+    "실제 데이터 없이 임의의 노선도를 표시하지 않습니다.";
+
+  wrapper.appendChild(message);
+
+  if (station.place_url) {
+    const link = document.createElement("a");
+    link.href = station.place_url;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = "카카오맵에서 역 정보 확인 →";
+    wrapper.appendChild(link);
+  }
+
+  results.appendChild(wrapper);
+  setStatus("지하철역 상세 정보");
+}
+
+// API 키 적용
+document.getElementById("saveKeys").onclick = () => {
+  busKey = document.getElementById("busKey").value.trim();
+  subwayKey = document.getElementById("subwayKey").value.trim();
+
+  alert(
+    "API 키를 현재 페이지에 적용했어. " +
+    "페이지를 새로고침하면 다시 입력해야 해."
+  );
+};
+
+// 탭 이벤트
+document.querySelectorAll(".tab").forEach(tab => {
+  tab.onclick = () => changeMode(tab.dataset.mode);
+});
+
+// 검색 이벤트
+searchButton.onclick = search;
+
+searchInput.addEventListener("keydown", event => {
+  if (event.key === "Enter") search();
+});
+
+// 현재 위치 버튼
+document.getElementById("locationButton").onclick = () => {
+  if (map) requestLocation();
+};
+
+// 페이지 시작
+async function startApplication() {
+  try {
+    await loadKakaoSDK();
+    initializeMap();
+  } catch (error) {
+    console.error(error);
+    showNotice(
+      "카카오맵 로딩 실패. API 키와 허용 도메인을 확인해 주세요."
+    );
+  }
+}
+
+document.addEventListener(
+  "DOMContentLoaded",
+  startApplication
+);
+</script>
+
+</body>
+</html>
